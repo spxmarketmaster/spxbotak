@@ -7,7 +7,7 @@ from datetime import datetime
 
 # =============== NASTAVENÍ ===============
 
-TOKEN = "MTQ0MjUzOTY3ODE2NjI4NjUyOQ.GH1DMF.rDap1dpBpfWUghMYFRoyj8SA3RyNYKXN3zDT3o"              # Sem vlož svůj bot token
+TOKEN = os.getenv("TOKEN")  # token se načte z prostředí (env variable)
 GUILD_ID = 1408726786144993283         # ID tvého serveru
 LOG_CHANNEL_ID = 1442541562709016606   # ID logovacího kanálu
 ADMIN_ROLE_ID = 1408788180097957899    # ID role, která může používat admin příkazy
