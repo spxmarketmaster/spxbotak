@@ -5,275 +5,302 @@ import json
 import os
 from datetime import datetime
 
-# =============== NASTAVENÍ ===============
+# ================== SETTINGS ==================
 
-TOKEN = os.getenv("TOKEN")  # token se načte z prostředí (env variable)
-GUILD_ID = 1408726786144993283         # ID tvého serveru
-LOG_CHANNEL_ID = 1442541562709016606   # ID logovacího kanálu
-ADMIN_ROLE_ID = 1408788180097957899    # ID role, která může používat admin příkazy
-DATA_FILE = "stock.json"         # soubor, kam se ukládá stock + historie
+TOKEN = os.getenv("TOKEN")  # Bot token from environment variable
 
-# =============== DISCORD SETUP ===============
+GUILD_ID = 1408726786144993283        # Your server ID
+LOG_CHANNEL_ID = 1442541562709016606  # Log channel ID
+ADMIN_ROLE_ID = 1408788180097957899   # Admin role ID
+
+DATA_FILE = "stock.json"              # JSON data file
+
+OUT_OF_STOCK_MESSAGE = (
+    "Hello Customer, please wait for <@1260340541241954447> to complete the product delivery. 📦\n"
+    "Your order is currently being processed, we want to ensure everything goes smoothly and securely.🔒\n"
+    "Thank you so much for your patience and understanding — we truly appreciate it! ✨"
+)
+
+# ================== PRODUCT CHOICES ==================
+
+PRODUCT_CHOICES = [
+    app_commands.Choice(name="Rockstar", value="Rockstar"),
+    app_commands.Choice(name="Steam", value="Steam"),
+    app_commands.Choice(name="Discord", value="Discord"),
+    app_commands.Choice(name="Netflix", value="Netflix"),
+    app_commands.Choice(name="Hbo", value="Hbo"),
+    app_commands.Choice(name="Ytb", value="Ytb"),
+    app_commands.Choice(name="NordVpn", value="NordVpn"),
+    app_commands.Choice(name="TunnealBear", value="TunnealBear"),
+    app_commands.Choice(name="Disney", value="Disney"),
+    app_commands.Choice(name="Paramount", value="Paramount"),
+    app_commands.Choice(name="IpVanish", value="IpVanish"),
+    app_commands.Choice(name="Spotify", value="Spotify"),
+    app_commands.Choice(name="Chatgpt", value="Chatgpt"),
+    app_commands.Choice(name="MC", value="MC"),
+    app_commands.Choice(name="Canva", value="Canva"),
+    app_commands.Choice(name="Robux", value="Robux"),
+    app_commands.Choice(name="Gta V", value="Gta V"),
+    app_commands.Choice(name="Filmora", value="Filmora"),
+    app_commands.Choice(name="Nitro", value="Nitro"),
+    app_commands.Choice(name="Capcut", value="Capcut"),
+    app_commands.Choice(name="Prime", value="Prime"),
+    app_commands.Choice(name="Nba", value="Nba"),
+    app_commands.Choice(name="Crunychyroll", value="Crunychyroll"),
+    app_commands.Choice(name="Ufc", value="Ufc"),
+    app_commands.Choice(name="Doulingo", value="Doulingo"),
+    app_commands.Choice(name="Rust", value="Rust"),
+    app_commands.Choice(name="OF", value="OF"),
+]
+
+# ================== DISCORD SETUP ==================
 
 intents = discord.Intents.default()
 intents.guilds = True
 intents.members = True
-intents.message_content = False
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
-# =============== PRÁCE S "DB" (JSON) ===============
+
+# ================== JSON STORAGE ==================
 
 def load_data():
     if not os.path.exists(DATA_FILE):
         return {"stock": {}, "history": []}
-    with open(DATA_FILE, "r", encoding="utf-8") as f:
-        try:
+
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-        except json.JSONDecodeError:
-            return {"stock": {}, "history": []}
+    except:
+        return {"stock": {}, "history": []}
 
 
 def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        json.dump(data, f, indent=4, ensure_ascii=False)
 
 
-data = load_data()
-
-
-def add_stock_items(product: str, items: list[str]):
-    product = product.lower()
-    if product not in data["stock"]:
-        data["stock"][product] = []
-    data["stock"][product].extend(items)
+def add_history_entry(user_id, product, code, action):
+    data = load_data()
+    data.setdefault("history", [])
+    data["history"].append(
+        {
+            "timestamp": datetime.utcnow().isoformat(),
+            "user_id": user_id,
+            "product": product,
+            "code": code,
+            "action": action,  # deliver / replace
+        }
+    )
     save_data(data)
 
 
-def pop_stock_item(product: str):
-    product = product.lower()
-    if product not in data["stock"] or len(data["stock"][product]) == 0:
-        return None
-    item = data["stock"][product].pop(0)
-    save_data(data)
-    return item
+def get_stock_for_product(product):
+    data = load_data()
+    data.setdefault("stock", {})
+    data["stock"].setdefault(product, [])
+    return data
 
 
-def get_stock_count(product: str | None = None):
-    if product:
-        product = product.lower()
-        return len(data["stock"].get(product, []))
+async def send_log(guild, message, code=None):
+    channel = guild.get_channel(LOG_CHANNEL_ID)
+    if channel is None:
+        return
+    if code:
+        await channel.send(f"{message}\n```{code}```")
     else:
-        # všechno
-        return {p: len(items) for p, items in data["stock"].items()}
+        await channel.send(message)
 
 
-def log_delivery(user_id: int, admin_id: int, product: str, item: str, type_: str):
-    entry = {
-        "user_id": user_id,
-        "admin_id": admin_id,
-        "product": product.lower(),
-        "item": item,
-        "type": type_,  # "deliver" nebo "replace"
-        "timestamp": datetime.utcnow().isoformat() + "Z",
-    }
-    data["history"].append(entry)
-    save_data(data)
+def is_admin(interaction):
+    role = interaction.guild.get_role(ADMIN_ROLE_ID)
+    return role in interaction.user.roles if role else False
 
 
-def get_last_delivery(user_id: int, product: str):
-    product = product.lower()
-    # Najdeme poslední záznam pro user + product
-    for entry in reversed(data["history"]):
-        if entry["user_id"] == user_id and entry["product"] == product:
-            return entry
-    return None
-
-# =============== ROLE CHECK ===============
-
-def has_admin_role(interaction: discord.Interaction) -> bool:
-    return any(role.id == ADMIN_ROLE_ID for role in interaction.user.roles)
-
-def admin_only():
-    async def predicate(interaction: discord.Interaction) -> bool:
-        if not has_admin_role(interaction):
-            await interaction.response.send_message(
-                "❌ Nemáš oprávnění používat tento příkaz.",
-                ephemeral=True
-            )
-            return False
-        return True
-    return app_commands.check(predicate)
-
-# =============== EVENTY ===============
+# ================== EVENTS ==================
 
 @bot.event
 async def on_ready():
-    print(f"✅ Bot je online jako {bot.user}")
-    try:
-        guild = discord.Object(id=GUILD_ID)
-        synced = await tree.sync(guild=guild)
-        print(f"Synced {len(synced)} command(s).")
-    except Exception as e:
-        print("Sync error:", e)
+    guild = bot.get_guild(GUILD_ID)
 
-# =============== SLASH COMMANDY ===============
+    if guild is None:
+        print(f"Guild {GUILD_ID} not found")
+        return
 
-# /addstock – přidá víc řádků za produkt
-@tree.command(
-    name="addstock",
-    description="Přidá položky do stocku (každý řádek = 1 položka).",
-    guild=discord.Object(id=GUILD_ID)
-)
-@admin_only()
-async def addstock(
-    interaction: discord.Interaction,
-    product: str,
-    items: str
-):
-    """
-    product: název produktu, např. fortnite-full
-    items: text s více řádky (každý řádek jeden účet/kód)
-    """
-    lines = [line.strip() for line in items.splitlines() if line.strip()]
+    synced = await tree.sync(guild=guild)
+    print(f"Bot is online as {bot.user}")
+    print(f"Synced {len(synced)} commands to {guild.name}")
+
+
+# ================== SLASH COMMANDS ==================
+
+# ---- /addstock --------------------------------------------------------------
+
+@tree.command(name="addstock", description="Add stock for a selected product.")
+@app_commands.describe(items="Each line will be saved as one stock item.")
+@app_commands.choices(product=PRODUCT_CHOICES)
+async def addstock_cmd(interaction, product: str, items: str):
+
+    if not is_admin(interaction):
+        return await interaction.response.send_message(
+            "❌ You don't have permission to use this command.", ephemeral=True
+        )
+
+    data = get_stock_for_product(product)
+
+    lines = [l.strip() for l in items.splitlines() if l.strip()]
     if not lines:
-        await interaction.response.send_message("⚠️ Nenašel jsem žádné položky ve vstupu.", ephemeral=True)
-        return
+        return await interaction.response.send_message(
+            "⚠️ No valid lines found.", ephemeral=True
+        )
 
-    add_stock_items(product, lines)
+    data["stock"][product].extend(lines)
+    save_data(data)
+
     await interaction.response.send_message(
-        f"✅ Přidáno **{len(lines)}** položek do produktu `{product.lower()}`.",
-        ephemeral=True
+        f"✅ Added **{len(lines)}** item(s) to **{product}**.\n"
+        f"Current stock: **{len(data['stock'][product])}**",
+        ephemeral=True,
     )
 
+    await send_log(interaction.guild, f"➕ AddStock for {product}", "\n".join(lines))
 
-# /stock – ukáže stav stocku
-@tree.command(
-    name="stock",
-    description="Ukáže počet položek ve stocku.",
-    guild=discord.Object(id=GUILD_ID)
-)
-@admin_only()
-async def stock(
-    interaction: discord.Interaction,
-    product: str | None = None
-):
+
+# ---- /stock -----------------------------------------------------------------
+
+@tree.command(name="stock", description="Show stock.")
+@app_commands.choices(product=PRODUCT_CHOICES)
+async def stock_cmd(interaction, product: str = None):
+
+    data = load_data()
+    data.setdefault("stock", {})
+
     if product:
-        count = get_stock_count(product)
-        await interaction.response.send_message(
-            f"📦 Produkt `{product.lower()}` má **{count}** položek ve stocku.",
-            ephemeral=True
+        count = len(data["stock"].get(product, []))
+        return await interaction.response.send_message(
+            f"📦 **{product}** has **{count}** item(s).",
+            ephemeral=True,
         )
-    else:
-        all_stock = get_stock_count()
-        if not all_stock:
-            await interaction.response.send_message("📦 Ve stocku nic není.", ephemeral=True)
-            return
-        msg_lines = ["📦 **Aktuální stock:**"]
-        for p, c in all_stock.items():
-            msg_lines.append(f"- `{p}`: **{c}** položek")
-        await interaction.response.send_message("\n".join(msg_lines), ephemeral=True)
 
-
-# /deliver – pošle 1 položku do kanálu + log
-@tree.command(
-    name="deliver",
-    description="Pošle 1 položku ze stocku pro uživatele a zaloguje to.",
-    guild=discord.Object(id=GUILD_ID)
-)
-@admin_only()
-async def deliver(
-    interaction: discord.Interaction,
-    product: str,
-    member: discord.Member
-):
-    item = pop_stock_item(product)
-    if item is None:
-        await interaction.response.send_message(
-            f"⚠️ Žádný stock pro produkt `{product.lower()}`.",
-            ephemeral=True
+    if not data["stock"]:
+        return await interaction.response.send_message(
+            "📦 Stock is empty.", ephemeral=True
         )
-        return
 
-    # Odešleme přímo do kanálu, kde byl použit příkaz
+    msg = "📦 **Current stock:**\n"
+    for p, items in data["stock"].items():
+        msg += f"- **{p}**: {len(items)} item(s)\n"
+
+    await interaction.response.send_message(msg, ephemeral=True)
+
+
+# ---- /deliver ---------------------------------------------------------------
+
+@tree.command(name="deliver", description="Deliver a product to a user.")
+@app_commands.describe(user="User to receive the product")
+@app_commands.choices(product=PRODUCT_CHOICES)
+async def deliver_cmd(interaction, product: str, user: discord.User):
+
+    if not is_admin(interaction):
+        return await interaction.response.send_message(
+            "❌ You don't have permission to use this command.", ephemeral=True
+        )
+
+    data = get_stock_for_product(product)
+    items = data["stock"].get(product, [])
+
+    if not items:
+        return await interaction.response.send_message(
+            OUT_OF_STOCK_MESSAGE, ephemeral=False
+        )
+
+    code = items.pop(0)
+    save_data(data)
+
+    # Send DM
+    try:
+        await user.send(
+            f"📦 **Delivery from {interaction.guild.name}**\n"
+            f"🛒 Product: `{product}`\n"
+            f"💬 Your code/account:\n```{code}```"
+        )
+        dm = "DM sent"
+    except:
+        dm = "DM failed (user closed DMs)"
+
     await interaction.response.send_message(
-        f"📦 **Deliver pro {member.mention}**\n```{item}```"
+        f"📦 Delivered **{product}** to {user.mention}\n"
+        f"💬 {dm}",
+        ephemeral=False,
     )
 
-    # Log do log kanálu
-    log_channel = interaction.client.get_channel(LOG_CHANNEL_ID)
-    if log_channel:
-        embed = discord.Embed(
-            title="📥 Deliver log",
-            color=0x2ecc71
+    add_history_entry(user.id, product, code, "deliver")
+    await send_log(interaction.guild, f"📦 Deliver for {user.mention}", code)
+
+
+# ---- /replace ---------------------------------------------------------------
+
+@tree.command(name="replace", description="Replace last delivered item for a user.")
+@app_commands.describe(user="User to receive replacement")
+@app_commands.choices(product=PRODUCT_CHOICES)
+async def replace_cmd(interaction, product: str, user: discord.User):
+
+    if not is_admin(interaction):
+        return await interaction.response.send_message(
+            "❌ You don't have permission to use this command.",
+            ephemeral=True,
         )
-        embed.add_field(name="Produkt", value=product.lower(), inline=True)
-        embed.add_field(name="Uživatel", value=member.mention, inline=True)
-        embed.add_field(name="Admin", value=interaction.user.mention, inline=True)
-        embed.add_field(name="Položka", value=f"```{item}```", inline=False)
-        embed.timestamp = datetime.utcnow()
-        await log_channel.send(embed=embed)
 
-    # uložit do historie
-    log_delivery(member.id, interaction.user.id, product, item, "deliver")
+    data = load_data()
+    history = data.get("history", [])
+    last = None
 
+    for entry in reversed(history):
+        if entry["user_id"] == user.id and entry["product"] == product:
+            last = entry
+            break
 
-# /replace – najde poslední deliver a pošle nový item
-@tree.command(
-    name="replace",
-    description="Pošle náhradní položku pro uživatele (poslední produkt).",
-    guild=discord.Object(id=GUILD_ID)
-)
-@admin_only()
-async def replace(
-    interaction: discord.Interaction,
-    product: str,
-    member: discord.Member
-):
-    last = get_last_delivery(member.id, product)
-    if not last:
-        await interaction.response.send_message(
-            f"⚠️ Nenalezen žádný předchozí deliver pro {member.mention} u produktu `{product.lower()}`.",
-            ephemeral=True
+    if last is None:
+        return await interaction.response.send_message(
+            "⚠️ No previous delivery found for this user/product.",
+            ephemeral=True,
         )
-        return
 
-    new_item = pop_stock_item(product)
-    if new_item is None:
-        await interaction.response.send_message(
-            f"⚠️ Ve stocku není žádná další položka pro `{product.lower()}`.",
-            ephemeral=True
+    stock_data = get_stock_for_product(product)
+    items = stock_data["stock"].get(product, [])
+    if not items:
+        return await interaction.response.send_message(
+            OUT_OF_STOCK_MESSAGE, ephemeral=False
         )
-        return
 
-    # Poslat do kanálu
+    new_code = items.pop(0)
+    save_data(stock_data)
+
+    try:
+        await user.send(
+            f"♻️ **Replacement from {interaction.guild.name}**\n"
+            f"🛒 Product: `{product}`\n"
+            f"💬 New code/account:\n```{new_code}```"
+        )
+        dm = "Replacement DM sent"
+    except:
+        dm = "DM failed"
+
     await interaction.response.send_message(
-        f"🔁 **Replace pro {member.mention}**\n"
-        f"Stará položka:\n```{last['item']}```\n"
-        f"Nová položka:\n```{new_item}```"
+        f"♻️ Replaced **{product}** for {user.mention}\n"
+        f"💬 {dm}",
+        ephemeral=False,
     )
 
-    # Log do log kanálu
-    log_channel = interaction.client.get_channel(LOG_CHANNEL_ID)
-    if log_channel:
-        embed = discord.Embed(
-            title="🔁 Replace log",
-            color=0xf1c40f
-        )
-        embed.add_field(name="Produkt", value=product.lower(), inline=True)
-        embed.add_field(name="Uživatel", value=member.mention, inline=True)
-        embed.add_field(name="Admin", value=interaction.user.mention, inline=True)
-        embed.add_field(name="Stará položka", value=f"```{last['item']}```", inline=False)
-        embed.add_field(name="Nová položka", value=f"```{new_item}```", inline=False)
-        embed.timestamp = datetime.utcnow()
-        await log_channel.send(embed=embed)
-
-    # uložit do historie jako replace
-    log_delivery(member.id, interaction.user.id, product, new_item, "replace")
+    add_history_entry(user.id, product, new_code, "replace")
+    await send_log(interaction.guild, f"♻️ Replace for {user.mention}", new_code)
 
 
-# =============== START BOTA ===============
+# ================== RUN BOT ==================
 
 if __name__ == "__main__":
-    bot.run(TOKEN)
+    if not TOKEN:
+        print("❌ TOKEN environment variable missing.")
+    else:
+        bot.run(TOKEN)
