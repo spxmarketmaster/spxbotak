@@ -4,14 +4,15 @@ from discord.ext import commands
 import json
 import os
 from datetime import datetime
+from typing import Optional
 
 # ================== SETTINGS ==================
 
 TOKEN = os.getenv("TOKEN")  # Bot token from environment variable
 
 GUILD_ID = 1408726786144993283        # Your server ID
-LOG_CHANNEL_ID = 1442541562709016066  # Log channel ID
-ADMIN_ROLE_ID = 1408788180097957809   # Admin role ID
+LOG_CHANNEL_ID = 1442541562709016606  # Log channel ID
+ADMIN_ROLE_ID = 1408788180097957899   # Admin role ID
 
 DATA_FILE = "stock.json"              # JSON data file
 
@@ -57,7 +58,7 @@ PRODUCT_CHOICES = [
 
 intents = discord.Intents.default()
 intents.guilds = True
-intents.members = True
+intents.members = True  # kvůli rolím / admin checku
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
@@ -108,7 +109,7 @@ def get_stock_for_product(product: str):
 
 
 async def send_log(
-    guild: discord.Guild, message: str, code_block: str | None = None
+    guild: discord.Guild, message: str, code_block: Optional[str] = None
 ):
     """Send log message into the log channel."""
     channel = guild.get_channel(LOG_CHANNEL_ID)
@@ -123,6 +124,7 @@ async def send_log(
 
 def is_admin(interaction: discord.Interaction) -> bool:
     """Check if the user has the admin role (by role ID)."""
+    # interaction.user je Member, takže má .roles
     return any(role.id == ADMIN_ROLE_ID for role in interaction.user.roles)
 
 
@@ -203,7 +205,7 @@ async def addstock_cmd(
 @app_commands.choices(product=PRODUCT_CHOICES)
 async def stock_cmd(
     interaction: discord.Interaction,
-    product: str | None = None
+    product: Optional[str] = None
 ):
     data = load_data()
     data.setdefault("stock", {})
