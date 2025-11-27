@@ -1,26 +1,24 @@
-import discord
-from discord import app_commands
-from discord.ext import commands
-import json
 import os
+import json
 from datetime import datetime
 from typing import Optional
 
-# ================== SETTINGS ==================
+import discord
+from discord import app_commands
+from discord.ext import commands
 
-TOKEN = os.getenv("TOKEN")  # Bot token from environment variable
+# ================== BASIC CONFIG ==================
 
-GUILD_ID = 1408726786144993283        # Your server ID
-LOG_CHANNEL_ID = 1442541562709016606  # Log channel ID
-ADMIN_ROLE_ID = 1408788180097957899   # Admin role ID
+# ⚠️ Nastav v Renderu env proměnnou TOKEN
+TOKEN = os.getenv("TOKEN")
 
-DATA_FILE = "stock.json"              # JSON data file
+# Tohle si přepiš na ID svého serveru / log kanálu / admin role
+GUILD_ID = 1408726786144993283          # ID serveru
+LOG_CHANNEL_ID = 1442541562709016606    # ID log kanálu
+ADMIN_ROLE_ID = 1408788180097957899     # ID admin role
+STAFF_ID = 1260340541241954447          # ID člena, co doručuje (tvůj staff)
 
-OUT_OF_STOCK_MESSAGE = (
-    "Hello Customer, please wait for <@1260340541241954447> to complete the product delivery. 📦\n"
-    "Your order is currently being processed, we want to ensure everything goes smoothly and securely.🔒\n"
-    "Thank you so much for your patience and understanding — we truly appreciate it! ✨"
-)
+DATA_FILE = "stock.json"                # JSON soubor se stockem
 
 # ================== PRODUCT CHOICES ==================
 
@@ -54,11 +52,11 @@ PRODUCT_CHOICES = [
     app_commands.Choice(name="OF", value="OF"),
 ]
 
-# ================== DISCORD SETUP ==================
+# ================== DISCORD CLIENT ==================
 
 intents = discord.Intents.default()
 intents.guilds = True
-intents.members = True  # kvůli rolím / admin checku
+intents.members = True  # kvůli kontrolám role – nezapomeň zapnout v Dev Portalu
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
@@ -66,65 +64,90 @@ tree = bot.tree
 
 # ================== JSON STORAGE ==================
 
-def load_data():
-    """Load stock & history from JSON file."""
+def log(msg: str):
+    """Jednoduché logování do konzole."""
+    print(f"[BOT] {datetime.utcnow().isoformat()} | {msg}")
+
+
+def load_data() -> dict:
+    """Načte data ze souboru nebo vrátí default strukturu."""
     if not os.path.exists(DATA_FILE):
+        log("No data file found, creating new structure.")
         return {"stock": {}, "history": []}
 
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
+            data = json.load(f)
+        # jistota, že tam jsou klíče
+        data.setdefault("stock", {})
+        data.setdefault("history", [])
+        return data
+    except Exception as e:
+        log(f"Error loading data file: {e}")
         return {"stock": {}, "history": []}
 
 
-def save_data(data):
-    """Save stock & history to JSON file."""
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+def save_data(data: dict):
+    """Uloží data do JSON souboru."""
+    try:
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+        log("Data saved to file.")
+    except Exception as e:
+        log(f"Error saving data file: {e}")
 
 
 def add_history_entry(user_id: int, product: str, code: str, action: str):
-    """Add an entry to history (deliver / replace)."""
+    """Přidá záznam do historie (deliver / replace)."""
     data = load_data()
-    data.setdefault("history", [])
     data["history"].append(
         {
             "timestamp": datetime.utcnow().isoformat(),
             "user_id": user_id,
             "product": product,
             "code": code,
-            "action": action,  # "deliver" or "replace"
+            "action": action,
         }
     )
     save_data(data)
+    log(f"History entry added: user={user_id}, product={product}, action={action}")
 
 
-def get_stock_for_product(product: str):
-    """Ensure product key exists in stock structure and return data dict."""
+def get_stock_for_product(product: str) -> dict:
+    """Vrátí strukturu dat a zajistí existenci pole pro produkt."""
     data = load_data()
-    data.setdefault("stock", {})
     data["stock"].setdefault(product, [])
     return data
 
 
 async def send_log(
-    guild: discord.Guild, message: str, code_block: Optional[str] = None
+    guild: Optional[discord.Guild],
+    message: str,
+    code_block: Optional[str] = None
 ):
-    """Send log message into the log channel."""
-    channel = guild.get_channel(LOG_CHANNEL_ID)
-    if channel is None:
+    """Pošle logovací zprávu do log kanálu."""
+    if guild is None:
+        log("send_log called but guild is None.")
         return
 
-    if code_block:
-        await channel.send(f"{message}\n```{code_block}```")
-    else:
-        await channel.send(message)
+    channel = guild.get_channel(LOG_CHANNEL_ID)
+    if channel is None:
+        log(f"Log channel with ID {LOG_CHANNEL_ID} not found.")
+        return
+
+    try:
+        if code_block:
+            await channel.send(f"{message}\n```{code_block}```")
+        else:
+            await channel.send(message)
+    except Exception as e:
+        log(f"Error sending log message: {e}")
 
 
 def is_admin(interaction: discord.Interaction) -> bool:
-    """Check if the user has the admin role (by role ID)."""
-    # interaction.user je Member, takže má .roles
+    """Check admin role by ID."""
+    if not isinstance(interaction.user, discord.Member):
+        return False
     return any(role.id == ADMIN_ROLE_ID for role in interaction.user.roles)
 
 
@@ -132,29 +155,30 @@ def is_admin(interaction: discord.Interaction) -> bool:
 
 @bot.event
 async def on_ready():
+    log(f"Logged in as {bot.user} (ID: {bot.user.id})")
+
     guild = bot.get_guild(GUILD_ID)
     if guild is None:
-        print(f"⚠️ Guild with ID {GUILD_ID} not found.")
+        log(f"Guild with ID {GUILD_ID} not found. "
+            f"Is the bot invited to that server and is GUILD_ID correct?")
         return
 
     try:
         synced = await tree.sync(guild=guild)
-        print(f"✅ Bot is online as {bot.user}")
-        print(f"✅ Synced {len(synced)} command(s) to guild {guild.name}.")
+        log(f"Synced {len(synced)} command(s) to guild {guild.name} ({guild.id}).")
+        for cmd in synced:
+            log(f" - /{cmd.name}")
     except Exception as e:
-        print(f"❌ Failed to sync commands: {e}")
+        log(f"Failed to sync commands: {e}")
 
 
 # ================== SLASH COMMANDS ==================
 
-# ---- /ping ---------------------------------------------------------------
-
 @tree.command(name="ping", description="Check if the bot is alive.")
 async def ping_cmd(interaction: discord.Interaction):
+    log(f"/ping used by {interaction.user} ({interaction.user.id})")
     await interaction.response.send_message("🏓 Pong!", ephemeral=True)
 
-
-# ---- /addstock -----------------------------------------------------------
 
 @tree.command(name="addstock", description="Add stock lines for a selected product.")
 @app_commands.describe(
@@ -166,7 +190,10 @@ async def addstock_cmd(
     product: str,
     items: str
 ):
+    log(f"/addstock used by {interaction.user} ({interaction.user.id}) | product={product}")
+
     if not is_admin(interaction):
+        log(" -> user is not admin, denied.")
         await interaction.response.send_message(
             "❌ You don't have permission to use this command.",
             ephemeral=True,
@@ -174,9 +201,10 @@ async def addstock_cmd(
         return
 
     data = get_stock_for_product(product)
-
     lines = [line.strip() for line in items.splitlines() if line.strip()]
+
     if not lines:
+        log(" -> no valid lines given.")
         await interaction.response.send_message(
             "⚠️ No valid lines found. Please provide at least one line.",
             ephemeral=True,
@@ -185,6 +213,8 @@ async def addstock_cmd(
 
     data["stock"][product].extend(lines)
     save_data(data)
+
+    log(f" -> added {len(lines)} line(s) to {product}. Now {len(data['stock'][product])} in stock.")
 
     await interaction.response.send_message(
         f"✅ Added **{len(lines)}** item(s) to **{product}**.\n"
@@ -199,16 +229,14 @@ async def addstock_cmd(
     )
 
 
-# ---- /stock --------------------------------------------------------------
-
 @tree.command(name="stock", description="Show current stock for all or one product.")
 @app_commands.choices(product=PRODUCT_CHOICES)
 async def stock_cmd(
     interaction: discord.Interaction,
     product: Optional[str] = None
 ):
+    log(f"/stock used by {interaction.user} ({interaction.user.id}) | product={product}")
     data = load_data()
-    data.setdefault("stock", {})
 
     if product:
         count = len(data["stock"].get(product, []))
@@ -220,19 +248,19 @@ async def stock_cmd(
 
     if not data["stock"]:
         await interaction.response.send_message(
-            "📦 Stock is currently **empty**.", ephemeral=True
+            "📦 Stock is currently **empty**.",
+            ephemeral=True,
         )
         return
 
-    lines = []
-    for prod, items in data["stock"].items():
-        lines.append(f"- **{prod}**: {len(items)} item(s)")
+    lines = [
+        f"- **{prod}**: {len(items)} item(s)"
+        for prod, items in data["stock"].items()
+    ]
 
     msg = "📦 **Current stock:**\n" + "\n".join(lines)
     await interaction.response.send_message(msg, ephemeral=True)
 
-
-# ---- /deliver ------------------------------------------------------------
 
 @tree.command(name="deliver", description="Deliver one stock item to a user.")
 @app_commands.describe(
@@ -244,7 +272,11 @@ async def deliver_cmd(
     product: str,
     user: discord.User
 ):
+    log(f"/deliver used by {interaction.user} ({interaction.user.id}) "
+        f"| product={product}, target={user.id}")
+
     if not is_admin(interaction):
+        log(" -> user is not admin, denied.")
         await interaction.response.send_message(
             "❌ You don't have permission to use this command.",
             ephemeral=True,
@@ -255,16 +287,22 @@ async def deliver_cmd(
     items = data["stock"].get(product, [])
 
     if not items:
-        await interaction.response.send_message(
-            OUT_OF_STOCK_MESSAGE,
-            ephemeral=False,
+        log(" -> stock empty, sending wait message.")
+        # zpráva, co jsi chtěl pro shop
+        msg = (
+            f"Hello {interaction.user.mention}, please wait for <@{STAFF_ID}> "
+            f"to complete the product delivery. 📦\n"
+            "Your order is currently being processed, we want to ensure everything "
+            "goes smoothly and securely.🔒\n"
+            "Thank you so much for your patience and understanding — we truly appreciate it! ✨"
         )
+        await interaction.response.send_message(msg, ephemeral=False)
         return
 
-    code = items.pop(0)  # take first item from stock
+    code = items.pop(0)  # vezme první kód
     save_data(data)
 
-    # DM to user
+    # DM pro zákazníka
     try:
         await user.send(
             f"📦 **Delivery from {interaction.guild.name}**\n"
@@ -272,10 +310,11 @@ async def deliver_cmd(
             f"💬 **Your code / account:**\n```{code}```"
         )
         dm_status = "✅ DM sent."
-    except Exception:
+        log(" -> DM sent successfully.")
+    except Exception as e:
         dm_status = "⚠️ Failed to send DM (user closed DMs?)."
+        log(f" -> error sending DM: {e}")
 
-    # Public confirmation
     await interaction.response.send_message(
         f"📦 Delivery for {user.mention}\n"
         f"🛒 **Product:** `{product}`\n"
@@ -293,8 +332,6 @@ async def deliver_cmd(
     )
 
 
-# ---- /replace ------------------------------------------------------------
-
 @tree.command(
     name="replace",
     description="Replace last delivered item for a user with a new one."
@@ -308,7 +345,11 @@ async def replace_cmd(
     product: str,
     user: discord.User
 ):
+    log(f"/replace used by {interaction.user} ({interaction.user.id}) "
+        f"| product={product}, target={user.id}")
+
     if not is_admin(interaction):
+        log(" -> user is not admin, denied.")
         await interaction.response.send_message(
             "❌ You don't have permission to use this command.",
             ephemeral=True,
@@ -318,7 +359,6 @@ async def replace_cmd(
     data = load_data()
     history = data.get("history", [])
 
-    # Find last delivery for this user & product
     last = None
     for entry in reversed(history):
         if entry.get("user_id") == user.id and entry.get("product") == product:
@@ -326,26 +366,31 @@ async def replace_cmd(
             break
 
     if last is None:
+        log(" -> no previous delivery found.")
         await interaction.response.send_message(
             "⚠️ No previous delivery found for this user and product.",
             ephemeral=True,
         )
         return
 
-    # Check stock for replacement
     data = get_stock_for_product(product)
     items = data["stock"].get(product, [])
+
     if not items:
-        await interaction.response.send_message(
-            OUT_OF_STOCK_MESSAGE,
-            ephemeral=False,
+        log(" -> stock empty for replacement, sending wait message.")
+        msg = (
+            f"Hello {interaction.user.mention}, please wait for <@{STAFF_ID}> "
+            f"to complete the product delivery. 📦\n"
+            "Your order is currently being processed, we want to ensure everything "
+            "goes smoothly and securely.🔒\n"
+            "Thank you so much for your patience and understanding — we truly appreciate it! ✨"
         )
+        await interaction.response.send_message(msg, ephemeral=False)
         return
 
     new_code = items.pop(0)
     save_data(data)
 
-    # DM replacement
     try:
         await user.send(
             f"♻️ **Replacement from {interaction.guild.name}**\n"
@@ -353,8 +398,10 @@ async def replace_cmd(
             f"💬 **New code / account:**\n```{new_code}```"
         )
         dm_status = "✅ Replacement DM sent."
-    except Exception:
+        log(" -> replacement DM sent successfully.")
+    except Exception as e:
         dm_status = "⚠️ Failed to send DM (user closed DMs?)."
+        log(f" -> error sending replacement DM: {e}")
 
     await interaction.response.send_message(
         f"♻️ Replacement for {user.mention}\n"
@@ -376,6 +423,9 @@ async def replace_cmd(
 
 if __name__ == "__main__":
     if not TOKEN:
-        print("❌ TOKEN environment variable is missing.")
+        log("❌ TOKEN environment variable is missing. Set TOKEN in Render env vars.")
     else:
+        log("Starting bot...")
+        # Na Renderu používej Background Worker, start command např.:
+        # python3 bot.py
         bot.run(TOKEN)
